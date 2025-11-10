@@ -1,5 +1,5 @@
 use crate::models::TransactionView;
-use crate::projection::ProjectedCashflow;
+use crate::projection::CashflowProjection;
 use chrono::NaiveDate;
 use colored::*;
 use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets::UTF8_FULL};
@@ -106,7 +106,7 @@ fn add_transaction_row(
 }
 
 /// Prints the cashflow projection table
-pub fn print_plan_table(projection: &ProjectedCashflow, options: &PlanDisplayOptions) {
+pub fn print_plan_table(projection: &CashflowProjection, options: &PlanDisplayOptions) {
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)
@@ -117,12 +117,12 @@ pub fn print_plan_table(projection: &ProjectedCashflow, options: &PlanDisplayOpt
             Cell::new("Zůstatek").add_attribute(Attribute::Bold),
         ])
         .add_row(vec![
-            Cell::new(format_date(projection.balance.date)).fg(Color::DarkGrey),
+            Cell::new(format_date(projection.balance_snapshot.date)).fg(Color::DarkGrey),
             Cell::new("Nastavený zůstatek")
                 .fg(Color::DarkGrey)
                 .add_attribute(Attribute::Bold),
             Cell::new(""),
-            Cell::new(format_amount(projection.balance.balance))
+            Cell::new(format_amount(projection.balance_snapshot.balance))
                 .set_alignment(CellAlignment::Right)
                 .fg(Color::Cyan),
         ]);
@@ -196,7 +196,7 @@ pub fn print_plan_table(projection: &ProjectedCashflow, options: &PlanDisplayOpt
     }
 
     println!();
-    println!("💚 = jednorázová transakce (one-time)");
+    println!("💚 = jednorázová transakce");
     println!(
         "⚠️  = zůstatek pod {}",
         format_amount(options.warning_threshold)

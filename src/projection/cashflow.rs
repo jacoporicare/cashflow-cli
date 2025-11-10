@@ -4,10 +4,10 @@ use crate::models::{
 use anyhow::anyhow;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 
-pub struct ProjectedCashflow<'a> {
+pub struct CashflowProjection<'a> {
     pub starting_balance: rust_decimal::Decimal,
     pub start_date: NaiveDate,
-    pub balance: &'a BalanceSnapshot,
+    pub balance_snapshot: &'a BalanceSnapshot,
     pub future_txns: Vec<TransactionView>,
     pub past_txns: Vec<TransactionView>,
 }
@@ -17,7 +17,7 @@ pub struct ProjectedCashflow<'a> {
 pub fn project_cashflow<'a>(
     data: &'a CashflowData,
     days: i64,
-) -> anyhow::Result<ProjectedCashflow<'a>> {
+) -> anyhow::Result<CashflowProjection<'a>> {
     // Find the most recent balance snapshot
     let snapshot = find_latest_balance_snapshot(data)?;
     let today = Local::now().date_naive();
@@ -122,10 +122,10 @@ pub fn project_cashflow<'a>(
         projected.push(projected_txn);
     }
 
-    Ok(ProjectedCashflow {
+    Ok(CashflowProjection {
         starting_balance,
         start_date: today,
-        balance: snapshot,
+        balance_snapshot: snapshot,
         future_txns: projected,
         past_txns: past_projected,
     })
@@ -282,14 +282,14 @@ mod tests {
         ));
 
         // Project 30 days from today
-        let projected_cashflow = project_cashflow(&data, 30).unwrap();
+        let projection = project_cashflow(&data, 30).unwrap();
 
         // Verify projection starts from today
-        assert_eq!(projected_cashflow.start_date, today);
+        assert_eq!(projection.start_date, today);
 
         // Should have at least Netflix transaction
-        assert!(!projected_cashflow.future_txns.is_empty());
-        let netflix = projected_cashflow
+        assert!(!projection.future_txns.is_empty());
+        let netflix = projection
             .future_txns
             .iter()
             .find(|p| p.description == "Netflix");
@@ -327,13 +327,13 @@ mod tests {
         ));
 
         // Project 60 days to ensure we catch at least one occurrence of each
-        let projected_cashflow = project_cashflow(&data, 60).unwrap();
+        let projection = project_cashflow(&data, 60).unwrap();
 
         // Verify projection starts from today
-        assert_eq!(projected_cashflow.start_date, today);
+        assert_eq!(projection.start_date, today);
 
         // Should have both "Služby" transactions (might be in current or next month)
-        let sluzby_transactions: Vec<_> = projected_cashflow
+        let sluzby_transactions: Vec<_> = projection
             .future_txns
             .iter()
             .filter(|p| p.description == "Služby")
