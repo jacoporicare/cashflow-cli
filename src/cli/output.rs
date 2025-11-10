@@ -1,8 +1,15 @@
-use crate::models::ProjectedTransaction;
+use crate::models::TransactionView;
+use crate::projection::ProjectedCashflow;
 use chrono::NaiveDate;
 use colored::*;
 use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets::UTF8_FULL};
 use rust_decimal::Decimal;
+
+/// Display options for the cashflow plan table
+pub struct PlanDisplayOptions {
+    pub warning_threshold: Decimal,
+    pub show_past: bool,
+}
 
 /// Formats a decimal amount as Czech currency (e.g., "22 158 Kč")
 pub fn format_amount(amount: Decimal) -> String {
@@ -44,13 +51,62 @@ pub fn format_date(date: NaiveDate) -> String {
     date.format("%d.%m.%Y").to_string()
 }
 
-/// Prints the cashflow projection table
-pub fn print_plan_table(
-    projected: &[ProjectedTransaction],
-    starting_balance: Decimal,
-    start_date: NaiveDate,
+/// Adds a transaction row to the table and updates minimum balance tracking
+fn add_transaction_row(
+    table: &mut Table,
+    txn: &TransactionView,
     warning_threshold: Decimal,
+    min_balance: &mut Decimal,
+    min_balance_date: &mut NaiveDate,
+    is_past: bool,
 ) {
+    let amount_cell = Cell::new(format_amount(txn.amount))
+        .set_alignment(CellAlignment::Right)
+        .fg(if txn.amount.is_sign_negative() {
+            Color::Red
+        } else {
+            Color::Green
+        });
+
+    let balance_cell = Cell::new(format_amount(txn.balance_after))
+        .set_alignment(CellAlignment::Right)
+        .fg(if txn.balance_after.is_sign_negative() {
+            Color::Red
+        } else if txn.balance_after < warning_threshold {
+            Color::Yellow
+        } else {
+            Color::Cyan
+        });
+
+    let mut description = txn.description.clone();
+    if txn.is_one_time {
+        description.push_str(" 💚");
+    }
+
+    table.add_row(vec![
+        Cell::new(format_date(txn.date)).fg(if is_past {
+            Color::DarkGrey
+        } else {
+            Color::White
+        }),
+        Cell::new(description).fg(if is_past {
+            Color::DarkGrey
+        } else {
+            Color::White
+        }),
+        amount_cell,
+        balance_cell,
+    ]);
+
+    // Track minimum balance
+    if txn.balance_after < *min_balance {
+        *min_balance = txn.balance_after;
+        *min_balance_date = txn.date;
+    }
+}
+
+/// Prints the cashflow projection table
+pub fn print_plan_table(projection: &ProjectedCashflow, options: &PlanDisplayOptions) {
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)
@@ -61,62 +117,61 @@ pub fn print_plan_table(
             Cell::new("Zůstatek").add_attribute(Attribute::Bold),
         ])
         .add_row(vec![
-            Cell::new(format_date(start_date)),
-            Cell::new("Současný zůstatek"),
+            Cell::new(format_date(projection.balance.date)).fg(Color::DarkGrey),
+            Cell::new("Nastavený zůstatek")
+                .fg(Color::DarkGrey)
+                .add_attribute(Attribute::Bold),
             Cell::new(""),
-            Cell::new(format_amount(starting_balance))
+            Cell::new(format_amount(projection.balance.balance))
                 .set_alignment(CellAlignment::Right)
                 .fg(Color::Cyan),
         ]);
 
-    // Transaction rows
-    let mut min_balance = starting_balance;
-    let mut min_balance_date = start_date;
+    // Track minimum balance across all transactions
+    let mut min_balance = projection.starting_balance;
+    let mut min_balance_date = projection.start_date;
 
-    for txn in projected {
-        let amount_cell = Cell::new(format_amount(txn.amount))
-            .set_alignment(CellAlignment::Right)
-            .fg(if txn.amount.is_sign_negative() {
-                Color::Red
-            } else {
-                Color::Green
-            });
-
-        let balance_cell = Cell::new(format_amount(txn.balance_after))
-            .set_alignment(CellAlignment::Right)
-            .fg(if txn.balance_after.is_sign_negative() {
-                Color::Red
-            } else if txn.balance_after < warning_threshold {
-                Color::Yellow
-            } else {
-                Color::Cyan
-            });
-
-        let mut description = txn.description.clone();
-        if txn.is_one_time {
-            description.push_str(" 💚");
+    if options.show_past {
+        for txn in &projection.past_txns {
+            add_transaction_row(
+                &mut table,
+                txn,
+                options.warning_threshold,
+                &mut min_balance,
+                &mut min_balance_date,
+                true,
+            );
         }
+    }
 
-        table.add_row(vec![
-            Cell::new(format_date(txn.date)),
-            Cell::new(description),
-            amount_cell,
-            balance_cell,
-        ]);
+    // Then, add the current balance row
+    table.add_row(vec![
+        Cell::new(format_date(projection.start_date)),
+        Cell::new("Současný zůstatek").add_attribute(Attribute::Bold),
+        Cell::new(""),
+        Cell::new(format_amount(projection.starting_balance))
+            .set_alignment(CellAlignment::Right)
+            .fg(Color::Cyan),
+    ]);
 
-        // Track minimum balance
-        if txn.balance_after < min_balance {
-            min_balance = txn.balance_after;
-            min_balance_date = txn.date;
-        }
+    // Finally, add projected (future) transactions
+    for txn in &projection.future_txns {
+        add_transaction_row(
+            &mut table,
+            txn,
+            options.warning_threshold,
+            &mut min_balance,
+            &mut min_balance_date,
+            false,
+        );
     }
 
     println!("{table}");
     println!();
 
     // Summary
-    if let (Some(_first), Some(last)) = (projected.first(), projected.last()) {
-        let total_change = last.balance_after - starting_balance;
+    if let Some(last) = projection.future_txns.last() {
+        let total_change = last.balance_after - projection.starting_balance;
         let total_str = format_amount(total_change);
 
         if total_change.is_sign_negative() {
@@ -126,7 +181,7 @@ pub fn print_plan_table(
         }
     }
 
-    if min_balance < warning_threshold {
+    if min_balance < options.warning_threshold {
         println!(
             "Nejnižší zůstatek: {} ({})",
             format_amount(min_balance).yellow(),
@@ -142,7 +197,10 @@ pub fn print_plan_table(
 
     println!();
     println!("💚 = jednorázová transakce (one-time)");
-    println!("⚠️  = zůstatek pod {}", format_amount(warning_threshold));
+    println!(
+        "⚠️  = zůstatek pod {}",
+        format_amount(options.warning_threshold)
+    );
 }
 
 #[cfg(test)]

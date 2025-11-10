@@ -94,10 +94,10 @@ impl BalanceSnapshot {
     }
 }
 
-/// Projected transaction for display (not persisted)
+/// Transaction view for display (not persisted)
 /// Generated from recurring templates or one-time transactions
 #[derive(Debug, Clone)]
-pub struct ProjectedTransaction {
+pub struct TransactionView {
     pub date: NaiveDate,
     pub day_of_month: u8,
     pub description: String,
@@ -108,7 +108,7 @@ pub struct ProjectedTransaction {
     pub balance_after: Decimal,
 }
 
-impl ProjectedTransaction {
+impl TransactionView {
     pub fn from_recurring(
         txn: &RecurringTransaction,
         date: NaiveDate,

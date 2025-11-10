@@ -16,6 +16,10 @@ pub enum Commands {
         /// Number of days to project (default: 30)
         #[arg(short, long, default_value_t = 30)]
         days: i64,
+
+        /// Show past transactions
+        #[arg(short, long)]
+        past: bool,
     },
 
     /// Manage account balance

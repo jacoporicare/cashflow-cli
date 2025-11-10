@@ -1,12 +1,12 @@
 use crate::Result;
-use crate::cli::{format_amount, print_plan_table};
+use crate::cli::{PlanDisplayOptions, format_amount, print_plan_table};
 use crate::projection::project_cashflow;
 use crate::storage::load_data;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
 /// Executes the plan command: shows cashflow projection for N days
-pub async fn execute_plan(days: i64) -> Result<()> {
+pub async fn execute_plan(days: i64, show_past: bool) -> Result<()> {
     // Load data from RON file
     let data = load_data().await?;
 
@@ -18,12 +18,15 @@ pub async fn execute_plan(days: i64) -> Result<()> {
         );
     }
 
-    // Generate projection - returns (starting_balance, today, projected_transactions)
-    let (starting_balance, today, projected) = project_cashflow(&data, days)?;
+    // Generate projection
+    let projection = project_cashflow(&data, days)?;
 
-    if projected.is_empty() {
+    if projection.future_txns.is_empty() {
         println!("No transactions scheduled for the next {} days.", days);
-        println!("Current balance: {}", format_amount(starting_balance));
+        println!(
+            "Current balance: {}",
+            format_amount(projection.starting_balance)
+        );
         return Ok(());
     }
 
@@ -31,7 +34,11 @@ pub async fn execute_plan(days: i64) -> Result<()> {
     let warning_threshold = Decimal::from_str("10000").unwrap();
 
     // Print the table with today's date and calculated balance
-    print_plan_table(&projected, starting_balance, today, warning_threshold);
+    let display_options = PlanDisplayOptions {
+        warning_threshold,
+        show_past,
+    };
+    print_plan_table(&projection, &display_options);
 
     Ok(())
 }

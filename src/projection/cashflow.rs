@@ -1,15 +1,23 @@
 use crate::models::{
-    BalanceSnapshot, CashflowData, OneTimeTransaction, ProjectedTransaction, RecurringTransaction,
+    BalanceSnapshot, CashflowData, OneTimeTransaction, RecurringTransaction, TransactionView,
 };
 use anyhow::anyhow;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 
+pub struct ProjectedCashflow<'a> {
+    pub starting_balance: rust_decimal::Decimal,
+    pub start_date: NaiveDate,
+    pub balance: &'a BalanceSnapshot,
+    pub future_txns: Vec<TransactionView>,
+    pub past_txns: Vec<TransactionView>,
+}
+
 /// Generates cashflow projection for the next N days from today
 /// Returns: (starting_balance, today, projected_transactions)
-pub fn project_cashflow(
-    data: &CashflowData,
+pub fn project_cashflow<'a>(
+    data: &'a CashflowData,
     days: i64,
-) -> anyhow::Result<(rust_decimal::Decimal, NaiveDate, Vec<ProjectedTransaction>)> {
+) -> anyhow::Result<ProjectedCashflow<'a>> {
     // Find the most recent balance snapshot
     let snapshot = find_latest_balance_snapshot(data)?;
     let today = Local::now().date_naive();
@@ -17,6 +25,7 @@ pub fn project_cashflow(
     // Step 1: Calculate current balance as of today
     // Start with snapshot balance and apply all transactions from snapshot date to today (exclusive)
     let mut current_balance = snapshot.balance;
+    let mut past_projected: Vec<TransactionView> = Vec::new();
 
     if today > snapshot.date {
         // Calculate balance from snapshot date to today
@@ -46,8 +55,20 @@ pub fn project_cashflow(
                 .then_with(|| a.1.created_at.cmp(&b.1.created_at))
         });
 
-        for (_date, txn, _is_recurring) in past_transactions {
+        for (date, txn, is_recurring) in past_transactions {
             current_balance += txn.amount;
+
+            let projected_txn = if is_recurring {
+                if let Some(recurring) = data.recurring.iter().find(|r| r.id == txn.id) {
+                    TransactionView::from_recurring(recurring, date, current_balance)
+                } else {
+                    continue;
+                }
+            } else {
+                TransactionView::from_one_time(&txn, current_balance)
+            };
+
+            past_projected.push(projected_txn);
         }
     }
 
@@ -89,19 +110,25 @@ pub fn project_cashflow(
             // It's a recurring transaction
             // Match by id to handle multiple recurring transactions with same description
             if let Some(recurring) = data.recurring.iter().find(|r| r.id == txn.id) {
-                ProjectedTransaction::from_recurring(recurring, date, current_balance)
+                TransactionView::from_recurring(recurring, date, current_balance)
             } else {
                 continue;
             }
         } else {
             // It's a one-time transaction
-            ProjectedTransaction::from_one_time(&txn, current_balance)
+            TransactionView::from_one_time(&txn, current_balance)
         };
 
         projected.push(projected_txn);
     }
 
-    Ok((starting_balance, today, projected))
+    Ok(ProjectedCashflow {
+        starting_balance,
+        start_date: today,
+        balance: snapshot,
+        future_txns: projected,
+        past_txns: past_projected,
+    })
 }
 
 /// Finds the most recent balance snapshot
@@ -255,14 +282,17 @@ mod tests {
         ));
 
         // Project 30 days from today
-        let (_starting_balance, projection_date, projected) = project_cashflow(&data, 30).unwrap();
+        let projected_cashflow = project_cashflow(&data, 30).unwrap();
 
         // Verify projection starts from today
-        assert_eq!(projection_date, today);
+        assert_eq!(projected_cashflow.start_date, today);
 
         // Should have at least Netflix transaction
-        assert!(!projected.is_empty());
-        let netflix = projected.iter().find(|p| p.description == "Netflix");
+        assert!(!projected_cashflow.future_txns.is_empty());
+        let netflix = projected_cashflow
+            .future_txns
+            .iter()
+            .find(|p| p.description == "Netflix");
         assert!(netflix.is_some());
 
         let netflix = netflix.unwrap();
@@ -297,13 +327,14 @@ mod tests {
         ));
 
         // Project 60 days to ensure we catch at least one occurrence of each
-        let (_starting_balance, projection_date, projected) = project_cashflow(&data, 60).unwrap();
+        let projected_cashflow = project_cashflow(&data, 60).unwrap();
 
         // Verify projection starts from today
-        assert_eq!(projection_date, today);
+        assert_eq!(projected_cashflow.start_date, today);
 
         // Should have both "Služby" transactions (might be in current or next month)
-        let sluzby_transactions: Vec<_> = projected
+        let sluzby_transactions: Vec<_> = projected_cashflow
+            .future_txns
             .iter()
             .filter(|p| p.description == "Služby")
             .collect();

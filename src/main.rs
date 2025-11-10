@@ -15,10 +15,10 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         None => {
-            execute_plan(30).await?;
+            execute_plan(30, false).await?;
         }
-        Some(Commands::Plan { days }) => {
-            execute_plan(*days).await?;
+        Some(Commands::Plan { days, past }) => {
+            execute_plan(*days, *past).await?;
         }
 
         Some(Commands::Balance { action }) => match action {
